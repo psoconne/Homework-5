@@ -1,0 +1,292 @@
+---
+title: "ST 558 - Homework 5"
+author: "Paige O'Connell"
+format: html
+editor: visual
+---
+
+
+## Task 1: Conceptual Questions
+
+1.  You use cross-validation when fitting a random forest model to choose the number of nodes and compare against other models using test set prediction error. The purpose is to prune the tree so you don't over fit the data, decrease variance and hopefully improve prediction.
+
+2.  The bagged tree algorithm is:
+
+    -   Bagging = Bootstrap Aggregation - a general method
+
+    -   Bootstrapping
+
+        -   re-sample from the data (non-parametric) or a fitted model (parametric)
+
+        -   for non-parametric:
+
+            -   treats sample as population
+
+            -   re-sampling done with replacement
+
+            -   can get some observation multiple times
+
+        -   method or estimation applied to each re-sample
+
+        -   traditionally used to obtain standard errors (measure of variability) or consturct confidence intervals
+
+3.  A general linear model:
+
+    -   Continuous response
+
+    -   Allows for both continuous and categorical predictors
+
+4.  When fitting a multiple linear regression model, adding an interaction term allows the model to capture the combined effect of two independent variables on the dependent variable, that would otherwise not be accounted for in the model.
+
+5.  We split our data into a training and test set so that we don't test our model on the same data we trained it on. We don't want the model to be trained to much to our data set our will only be good at predicting for that data set and not for new data.
+
+## Task 2: Fitting Models
+
+```{r, message = FALSE}
+# All libraries needed
+library(tidyverse)
+library(caret)
+library(gbm)
+```
+
+
+```{r}
+heart_data <- read_csv("heart.csv")
+head(heart_data)
+```
+
+### Quick EDA/Data Preparation
+
+#### Part 1
+
+> Quickly understand your data. Check on missingness and summarize the data, especially with respect to the relationships of the variables to HeartDisease.
+
+> Structure of heart data set:
+
+```{r}
+str(heart_data)
+```
+
+> Summary of heart data set:
+
+```{r}
+summary(heart_data)
+```
+
+> Rate of missing values:
+
+```{r}
+# Create a function to count number of missing values
+sum_na <- function(column){
+ sum(is.na(column))
+}
+
+# Use above function across all variables in heart data set
+na_counts <- heart_data |>
+ summarize(across(everything(), sum_na))
+na_counts
+```
+
+> Relationship between variables:
+
+```{r}
+# Select only numeric variables for correlation
+numeric_vars <- heart_data |> 
+  select_if(is.numeric)
+
+# Calculate correlation matrix
+cor(numeric_vars)
+```
+
+#### Part 2
+
+> Create a new variable that is a factor version of the HeartDisease variable
+
+```{r}
+heart_data$HeartDisease <- as.factor(heart_data$HeartDisease)
+```
+
+> Remove the ST_Slope variable
+
+```{r}
+heart_data <- heart_data |>
+  select(-ST_Slope)
+
+head(heart_data)
+```
+
+#### Part 3
+
+> Create dummy columns corresponding to the values of the variables Sex, ExerciseAngina, ChestPainType, and RestingECG for use in our kNN fit. The caret vignette has a function to help us out here. You should use `dummyVars()` and `predict()` to create new columns. Then add these columns to our data frame.
+
+```{r}
+# Use dummyVars and predict to create new columns
+dummy_vars <- dummyVars(~ Sex + ExerciseAngina + ChestPainType + RestingECG, data = heart_data)
+dummy_data <- predict(dummy_vars, newdata = heart_data)
+heart_data <- cbind(heart_data, dummy_data) 
+
+head(heart_data)
+```
+
+### Split your Data
+
+> Split your data into a training and test set.
+
+```{r}
+# Use caret package to split data into training and test sets
+trainIndex <- createDataPartition(heart_data$HeartDisease, p = 0.1, list = FALSE)
+heartTrain <- heart_data[trainIndex, ]
+heartTest <- heart_data[-trainIndex, ]
+```
+
+### kNN
+
+> Next, we’ll fit a kNN model.
+
+> Train the kNN model. Use repeated 10 fold cross-validation, with the number of repeats being 3. You should also preprocess the data by centering and scaling. When fitting the model, set the `tuneGrid` so that you are considering values of k of 1, 2, 3, . . . , 40.
+
+```{r}
+# Train the kNN model
+knn_model <- train(HeartDisease ~ SexF + SexM + Age + Cholesterol + RestingBP,
+                   data = heartTrain,
+                   method = "knn",
+                   trControl = trainControl(method = "repeatedcv", number = 10, 
+                                            repeats = 3, preProc = c("center", "scale")),
+                   tuneGrid = expand.grid(k = 1:40))
+
+knn_model
+```
+
+> Lastly, check how well your chosen model does on the test set using the `confusionMatrix()` function.
+
+```{r}
+knn_preds <- predict(knn_model, newdata = heartTest)
+confusionMatrix(knn_preds, heartTest$HeartDisease)
+```
+
+### Logistic Regression
+
+> Using your EDA, posit three different logistic regression models.
+
+> Fit those models on the training set, using repeated CV as done above. You can preprocess the data or not, up to you.
+
+```{r}
+# First Logistic Regression model
+log_reg1 <- train(HeartDisease ~ SexF + SexM + Age + Cholesterol + RestingBP , 
+                  data = heartTrain,
+                  method = "glmnet",
+                  family = "binomial",
+                  trControl = trainControl(method = "repeatedcv", number = 10, 
+                                            repeats = 3, preProc = c("center", "scale")))
+
+# Second Logistic Regression model
+log_reg2 <- train(HeartDisease ~ SexF + SexM + Age:Cholesterol + RestingBP, 
+                  data = heartTrain,
+                  method = "glmnet",
+                  family = "binomial",
+                  trControl = trainControl(method = "repeatedcv", number = 10, 
+                                            repeats = 3, preProc = c("center", "scale")))
+
+# Third Logistic Regression model
+log_reg3 <- train(HeartDisease ~ SexF + SexM + Age + Cholesterol + RestingBP^2, 
+                  data = heartTrain,
+                  method = "glmnet",
+                  family = "binomial",
+                  trControl = trainControl(method = "repeatedcv", number = 10, 
+                                            repeats = 3, preProc = c("center", "scale")))
+```
+
+> Identify your best model and provide a basic summary of it.
+
+```{r}
+log_reg1_preds <- predict(log_reg1, newdata = heartTest)
+log_reg2_preds <- predict(log_reg2, newdata = heartTest)
+log_reg3_preds <- predict(log_reg3, newdata = heartTest)
+
+postResample(log_reg1_preds, heartTest$HeartDisease)
+postResample(log_reg2_preds, heartTest$HeartDisease)
+postResample(log_reg3_preds, heartTest$HeartDisease)
+```
+
+> Between these three logistic regression models, the first and third model did the best. For simplicity we will use the first
+
+```{r}
+print(log_reg1)
+```
+
+> Lastly, check how well your chosen model does on the test set using the confusionMatrix() function.
+
+```{r}
+log_reg_preds <- predict(log_reg1, newdata = heartTest)
+confusionMatrix(log_reg_preds, heartTest$HeartDisease)
+```
+
+### Tree Models
+
+> Choose your own variables of interest (as with logistic regression, this models can accept factor/character variables as predictors). Use repated 10 fold CV to select a best
+
+> -   classification tree model (use method = rpart: tuning parameter is cp, use values 0, 0.001, 0.002,..., 0.1)
+> -   a random forest (use method = rf: tuning parameter is mtry, use values of 1, 2, . . . , \# of predictors (bagging is a special case here!)
+> -   a boosted tree (use method = gbm: tuning parameters are n.trees, interaction.depth, shrinkage, and n.minobsinnode, use all combinations of n.trees of 25, 50, 100, and 200, interaction.depth of 1, 2, 3, shrinkage = 0.1, and nminobsinnode = 10; Hint: use expand.grid() to create your data frame for tuneGrid and verbose = FALSE limits the output produced
+
+```{r}
+# Train  classification tree
+class_tree <- train(HeartDisease ~ SexF + SexM + Age + Cholesterol + RestingBP,
+                    data = heartTrain,
+                    method = "rpart",
+                    trControl = trainControl(method = "repeatedcv", number = 10, repeats = 3),
+                    tuneGrid = expand.grid(cp = seq(0, 0.1, by = 0.001)))
+
+# Train random forest
+rand_for <- train(HeartDisease ~ SexF + SexM + Age + Cholesterol + RestingBP,
+                  data = heartTrain,
+                  method = "rf",
+                  trControl = trainControl(method = "repeatedcv", number = 10, repeats = 3),
+                  tuneGrid = expand.grid(mtry = 1:5))
+
+# Train boosted tree
+boost_tree <- train(HeartDisease ~ .,
+                  data = heartTrain,
+                  method = "gbm",
+                  trControl = trainControl(method = "repeatedcv", number = 10, repeats = 3),
+                  tuneGrid = expand.grid(n.trees = c(25, 50, 100, 200),
+                                         interaction.depth = 1:3,
+                                         shrinkage = 0.1,
+                                         n.minobsinnode = 10),
+                  verbose = FALSE)
+```
+
+> Lastly, check how well each of your chosen models do on the test set using the confusionMatrix() function.
+
+```{r}
+class_tree_preds <- predict(class_tree, newdata = heartTest)
+rand_for_preds <- predict(rand_for, newdata = heartTest)
+boost_tree_preds <- predict(boost_tree, newdata = heartTest)
+```
+
+> Classification Tree
+
+```{r}
+confusionMatrix(class_tree_preds, heartTest$HeartDisease)
+```
+
+> Random Forest
+
+```{r}
+confusionMatrix(rand_for_preds, heartTest$HeartDisease)
+```
+
+> Boosted Tree
+
+```{r}
+confusionMatrix(boost_tree_preds, heartTest$HeartDisease)
+```
+
+
+### Wrap up
+
+> In terms of accuracy, the Boosted Tree performed the best.
+
+```{r}
+postResample(boost_tree_preds, heartTest$HeartDisease)
+```
